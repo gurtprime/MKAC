@@ -28,6 +28,18 @@ pub fn ensure_dirs() -> std::io::Result<()> {
     Ok(())
 }
 
+/// Write a small user-state file through a temporary sibling so a process
+/// termination cannot leave a half-written JSON document behind.
+pub fn atomic_write(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let mut temp = path.to_path_buf();
+    temp.set_extension("tmp");
+    std::fs::write(&temp, data)?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(temp, path)
+}
+
 /// Strip characters that Windows forbids in filenames and any control chars.
 pub fn sanitize_name(name: &str) -> String {
     let cleaned: String = name
@@ -39,4 +51,19 @@ pub fn sanitize_name(name: &str) -> String {
         })
         .collect();
     cleaned.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_name;
+
+    #[test]
+    fn sanitizes_windows_path_characters() {
+        assert_eq!(sanitize_name(r#" ..\bad:name?.json "#), ".._bad_name_.json");
+    }
+
+    #[test]
+    fn removes_control_characters_and_outer_whitespace() {
+        assert_eq!(sanitize_name("  hello\nworld  "), "hello_world");
+    }
 }

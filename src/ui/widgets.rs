@@ -1,6 +1,6 @@
 use egui::{
-    Button, Color32, CornerRadius, Frame, Margin, Response, RichText, Sense, Shadow, Stroke, Ui,
-    vec2,
+    vec2, Button, Color32, CornerRadius, Frame, Margin, Response, RichText, Sense, Shadow, Stroke,
+    Ui,
 };
 
 use crate::engine::HotkeyBinding;
@@ -41,9 +41,9 @@ pub fn checkbox(ui: &mut Ui, value: &mut bool, label: &str) -> Response {
     const ROW_H: f32 = 24.0;
 
     let font_id = egui::FontId::new(14.0, egui::FontFamily::Proportional);
-    let galley =
-        ui.painter()
-            .layout_no_wrap(label.to_string(), font_id, theme::p().text);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_string(), font_id, theme::p().text);
     let size = vec2(BOX + GAP + galley.size().x, ROW_H);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if resp.clicked() {
@@ -106,13 +106,12 @@ fn row_label_colored(ui: &mut Ui, text: &str, color: Color32) {
     // 30 = segmented control's outer height (inner button 24 + margin 3 + 3).
     const ROW_H: f32 = 30.0;
     let font_id = egui::FontId::new(13.0, egui::FontFamily::Proportional);
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font_id, color);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), font_id, color);
     let size = vec2(galley.size().x, ROW_H);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let pos = egui::pos2(
-        rect.left(),
-        rect.center().y - galley.size().y * 0.5,
-    );
+    let pos = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
     ui.painter().galley(pos, galley, color);
 }
 
@@ -191,14 +190,11 @@ pub fn rebindable_key_chip(ui: &mut Ui, vk: &mut u16, capturing: &mut bool) -> b
 
 /// Keycap chip with an inline "rebind" affordance. The chip itself is a
 /// plain label — no click-to-capture. Rebinding is opt-in:
-///   - Right-click the chip, OR
-///   - Click the adjacent small "rebind" ghost button.
+/// - Right-click the chip, OR
+/// - Click the adjacent small "rebind" ghost button.
+///
 /// Both require deliberate intent, so a focus-steal click on MKAC cannot
-/// flip the app into capture mode. (That was the root cause of the
-/// "hotkey works unfocused, not focused" bug: the click that gave MKAC
-/// focus would land on/near the chip and silently enter rebind, making
-/// `REBIND_ACTIVE` true and suppressing the LL hook dispatch on the next
-/// press of the bound key.)
+/// silently enter capture mode.
 pub fn rebindable_hotkey_chip(
     ui: &mut Ui,
     binding: &mut HotkeyBinding,
@@ -319,11 +315,7 @@ pub fn card_header(ui: &mut Ui, title: &str) {
 }
 
 /// Card heading with a trailing right-aligned section (e.g. an OFF/ON toggle).
-pub fn card_header_with<R>(
-    ui: &mut Ui,
-    title: &str,
-    trailing: impl FnOnce(&mut Ui) -> R,
-) -> R {
+pub fn card_header_with<R>(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui) -> R) -> R {
     let mut result = None;
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(vec2(3.0, 12.0), Sense::hover());
@@ -478,7 +470,11 @@ pub fn toggle_pill(ui: &mut Ui, on: &mut bool) -> bool {
                         })
                         .strong(),
                 )
-                .fill(if *on { theme::p().accent } else { Color32::TRANSPARENT })
+                .fill(if *on {
+                    theme::p().accent
+                } else {
+                    Color32::TRANSPARENT
+                })
                 .stroke(Stroke::NONE)
                 .corner_radius(CornerRadius::same(3))
                 .min_size(vec2(26.0, 14.0));
@@ -489,5 +485,3 @@ pub fn toggle_pill(ui: &mut Ui, on: &mut bool) -> bool {
         });
     *on != before
 }
-
-

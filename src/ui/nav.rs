@@ -1,4 +1,4 @@
-use egui::{Button, Color32, CornerRadius, Frame, Margin, RichText, Stroke, Ui, vec2};
+use egui::{vec2, Button, Color32, CornerRadius, Frame, Margin, RichText, Stroke, Ui};
 
 use crate::ui::theme;
 

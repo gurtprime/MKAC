@@ -44,14 +44,17 @@ pub fn save_macro(m: &Macro) -> anyhow::Result<()> {
     ensure_macros_dir()?;
     let path = macro_path(&m.name).ok_or_else(|| anyhow::anyhow!("no macros dir"))?;
     let data = serde_json::to_string_pretty(m)?;
-    std::fs::write(&path, data)?;
+    super::atomic_write(&path, data.as_bytes())?;
     Ok(())
 }
 
 pub fn load_macro(name: &str) -> anyhow::Result<Macro> {
     let path = macro_path(name).ok_or_else(|| anyhow::anyhow!("no macros dir"))?;
     let data = std::fs::read_to_string(&path)?;
-    let m: Macro = serde_json::from_str(&data)?;
+    let mut m: Macro = serde_json::from_str(&data)?;
+    // Older files and hand-edited files may have a missing or stale cached
+    // duration. The frame deltas are authoritative.
+    m.recompute_duration();
     Ok(m)
 }
 
@@ -63,4 +66,3 @@ pub fn delete_macro(name: &str) -> anyhow::Result<()> {
     }
     Ok(())
 }
-

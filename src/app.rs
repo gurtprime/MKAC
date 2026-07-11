@@ -11,7 +11,7 @@ use crate::engine::{
     Action, Command, EngineEvent, EngineHandle, MouseButton, RateConfig, StopAfter,
 };
 use crate::hooks::hotkey as hk_state;
-use crate::hooks::recording::{RecEvent, set_recording};
+use crate::hooks::recording::{set_recording, RecEvent};
 use crate::hooks::HookHandle;
 use crate::tray::{self, TrayHandle};
 use crate::ui::panel_clicker::MouseConfig;
@@ -101,7 +101,7 @@ impl App {
         settings: Settings,
     ) -> Self {
         theme::install(&cc.egui_ctx, settings.theme);
-        // Give the LL hook thread a handle so it can wake the UI when a
+        // Give the input thread a handle so it can wake the UI when a global
         // hotkey fires while MKAC isn't focused.
         hk_state::install_egui_ctx(cc.egui_ctx.clone());
 
@@ -119,7 +119,9 @@ impl App {
         let actual_autostart = autostart::is_enabled();
         if state.settings.autostart != actual_autostart {
             state.settings.autostart = actual_autostart;
-            let _ = state.settings.save();
+            if let Err(e) = state.settings.save() {
+                eprintln!("settings save failed: {e}");
+            }
         }
 
         // Install hotkey bindings from persisted settings
@@ -152,10 +154,7 @@ impl App {
 /// padding, so the three horizontal gutters (left edge · between cols · right
 /// edge) are visually symmetric. Inner-column item_spacing is restored so
 /// widgets inside cards still sit tight.
-fn symmetric_columns<R>(
-    ui: &mut egui::Ui,
-    add_contents: impl FnOnce(&mut [egui::Ui]) -> R,
-) -> R {
+fn symmetric_columns<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut [egui::Ui]) -> R) -> R {
     // 22 = CentralPanel default margin (8) + outer Frame inner_margin (14).
     const OUTER_GAP: f32 = 22.0;
     let inner_gap = ui.spacing().item_spacing.x;
@@ -177,6 +176,7 @@ fn build_action(state: &AppState) -> Action {
             pattern: state.mouse.pattern,
             target: state.mouse.target(),
             mode: state.mouse.mode,
+            repeat_while_toggled: state.mouse.repeat_while_toggled,
         },
         Tab::Keyboard => Action::KeyTap {
             vk: state.keypress.selected_vk,
@@ -200,7 +200,7 @@ fn handle_settings_actions(
             SettingsAction::SetAutostart(v) => match autostart::set(v) {
                 Ok(()) => {
                     state.settings.autostart = v;
-                    let _ = state.settings.save();
+                    save_settings(state);
                     state.settings_panel.feedback = Some((
                         if v {
                             "Autostart enabled".into()
@@ -211,30 +211,25 @@ fn handle_settings_actions(
                     ));
                 }
                 Err(e) => {
-                    state.settings_panel.feedback =
-                        Some((format!("Autostart: {e}"), false));
+                    state.settings_panel.feedback = Some((format!("Autostart: {e}"), false));
                 }
             },
             SettingsAction::SetCloseToTray(v) => {
                 state.settings.close_to_tray = v;
-                let _ = state.settings.save();
+                save_settings(state);
             }
             SettingsAction::SetStartMinimized(v) => {
                 state.settings.start_minimized = v;
-                let _ = state.settings.save();
+                save_settings(state);
             }
             SettingsAction::SetResizableWindow(v) => {
                 state.settings.resizable_window = v;
-                let _ = state.settings.save();
+                save_settings(state);
                 ctx.send_viewport_cmd(ViewportCommand::Resizable(v));
                 if v {
-                    ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::vec2(
-                        520.0, 460.0,
-                    )));
+                    ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(egui::vec2(520.0, 460.0)));
                 }
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(
-                    669.0, 547.0,
-                )));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(669.0, 547.0)));
                 state.settings_panel.feedback = Some((
                     if v {
                         "Resize mode on".into()
@@ -245,6 +240,13 @@ fn handle_settings_actions(
                 ));
             }
         }
+    }
+}
+
+fn save_settings(state: &mut AppState) {
+    if let Err(e) = state.settings.save() {
+        eprintln!("settings save failed: {e}");
+        state.settings_panel.feedback = Some((format!("Settings: {e}"), false));
     }
 }
 
@@ -262,18 +264,29 @@ fn discard_recording(record_rx: &crossbeam_channel::Receiver<RecEvent>) {
 fn build_macro_from_buffer(buffer: &[RecEvent], name: &str, stop_at: Instant) -> Macro {
     // Trim events captured within 150ms before stop (likely the Stop-button approach path).
     let grace = Duration::from_millis(150);
-    let cutoff = stop_at - grace;
-    let kept: Vec<&RecEvent> = buffer.iter().filter(|e| e.at <= cutoff).collect();
+    let cutoff = stop_at.checked_sub(grace);
+    let kept: Vec<&RecEvent> = buffer
+        .iter()
+        .filter(|e| cutoff.is_some_and(|cutoff| e.at <= cutoff))
+        .collect();
 
     let mut frames: Vec<MacroFrame> = Vec::with_capacity(kept.len());
     let mut prev: Option<Instant> = None;
     for ev in kept {
         let delta = match prev {
-            Some(p) => ev.at.duration_since(p).as_millis().min(u32::MAX as u128) as u32,
+            Some(p) => ev
+                .at
+                .checked_duration_since(p)
+                .unwrap_or(Duration::ZERO)
+                .as_millis()
+                .min(u32::MAX as u128) as u32,
             None => 0,
         };
         prev = Some(ev.at);
-        frames.push(MacroFrame { delta_ms: delta, event: ev.event });
+        frames.push(MacroFrame {
+            delta_ms: delta,
+            event: ev.event,
+        });
     }
     Macro::new(name, frames)
 }
@@ -309,8 +322,7 @@ fn handle_macro_actions(
                 let m = build_macro_from_buffer(&state.recording_buffer, "", stop_at);
                 state.recording_buffer.clear();
                 if m.frames.is_empty() {
-                    state.macros.feedback =
-                        Some(("Nothing recorded".into(), false));
+                    state.macros.feedback = Some(("Nothing recorded".into(), false));
                 } else {
                     state.macros.pending = Some(m);
                     state.macros.feedback = None;
@@ -336,8 +348,7 @@ fn handle_macro_actions(
                             // Put it back so the user can retry with a
                             // different name / after fixing the error.
                             state.macros.pending = Some(m);
-                            state.macros.feedback =
-                                Some((format!("Save failed: {e}"), false));
+                            state.macros.feedback = Some((format!("Save failed: {e}"), false));
                         }
                     }
                 }
@@ -359,23 +370,21 @@ fn handle_macro_actions(
                     state.macros.feedback = Some((format!("Load failed: {e}"), false));
                 }
             },
-            MacroAction::DeleteMacro(name) => {
-                match macros_cfg::delete_macro(&name) {
-                    Ok(()) => {
-                        if state.macros.loaded.as_deref() == Some(&name) {
-                            state.macros.loaded = None;
-                            state.macros.loaded_event_count = 0;
-                            state.macros.loaded_duration_ms = 0;
-                            let _ = cmd_tx.send(Command::ClearMacro);
-                        }
-                        state.macros.list = macros_cfg::list_macros();
-                        state.macros.feedback = Some((format!("Deleted '{name}'"), true));
+            MacroAction::DeleteMacro(name) => match macros_cfg::delete_macro(&name) {
+                Ok(()) => {
+                    if state.macros.loaded.as_deref() == Some(&name) {
+                        state.macros.loaded = None;
+                        state.macros.loaded_event_count = 0;
+                        state.macros.loaded_duration_ms = 0;
+                        let _ = cmd_tx.send(Command::ClearMacro);
                     }
-                    Err(e) => {
-                        state.macros.feedback = Some((format!("Delete failed: {e}"), false));
-                    }
+                    state.macros.list = macros_cfg::list_macros();
+                    state.macros.feedback = Some((format!("Deleted '{name}'"), true));
                 }
-            }
+                Err(e) => {
+                    state.macros.feedback = Some((format!("Delete failed: {e}"), false));
+                }
+            },
             MacroAction::SetLoops(n) => {
                 state.macros.loops = n;
                 let _ = cmd_tx.send(Command::SetMacroLoops(n));
@@ -397,7 +406,7 @@ fn handle_macro_actions(
             MacroAction::SetRecordHotkey(b) => {
                 state.settings.macro_record_hotkey = b;
                 hk_state::set_macro_record_binding(b);
-                let _ = state.settings.save();
+                save_settings(state);
                 state.macros.feedback = Some((
                     format!("Record hotkey set to {}", widgets::format_binding(&b)),
                     true,
@@ -426,10 +435,7 @@ impl eframe::App for App {
         // First-frame native title bar theming. Deferred because
         // FindWindowW only succeeds once winit has actually created the HWND.
         if !self.titlebar_themed {
-            crate::platform::apply_titlebar_theme(
-                self.state.settings.theme,
-                theme::p(),
-            );
+            crate::platform::apply_titlebar_theme(self.state.settings.theme, theme::p());
             self.titlebar_themed = true;
         }
 
@@ -447,7 +453,7 @@ impl eframe::App for App {
         }
         self.state.was_focused_last_frame = focused;
 
-        // Keep LL hook's rebind flag in sync with UI capture state so the
+        // Keep the input thread's rebind flag in sync with UI capture state so the
         // currently-bound hotkey doesn't fire while the user is rebinding
         // or selecting an autopress target.
         hk_state::set_rebind_active(
@@ -498,9 +504,8 @@ impl eframe::App for App {
             }
         }
 
-        // Macro-record hotkey pulses from the LL hook.
-        let pulses =
-            hk_state::take_macro_record_requests(&mut self.state.macro_record_last_seen);
+        // Macro-record hotkey pulses from the RegisterHotKey message thread.
+        let pulses = hk_state::take_macro_record_requests(&mut self.state.macro_record_last_seen);
         for _ in 0..pulses {
             // While a pending recording is waiting to be named, the hotkey
             // is a no-op — user should click Save / Discard first.
@@ -543,14 +548,11 @@ impl eframe::App for App {
                             (Tab::Settings, "Settings"),
                         ],
                     );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if widgets::theme_toggle(ui, self.state.settings.theme).clicked() {
-                                theme_clicked = true;
-                            }
-                        },
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if widgets::theme_toggle(ui, self.state.settings.theme).clicked() {
+                            theme_clicked = true;
+                        }
+                    });
                 });
                 ui.add_space(10.0);
 
@@ -571,9 +573,7 @@ impl eframe::App for App {
                 let footer_label = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
                     ui.add_sized(
                         egui::vec2(0.0, ROW_H),
-                        egui::Label::new(
-                            RichText::new(text).size(13.0).color(color),
-                        ),
+                        egui::Label::new(RichText::new(text).size(13.0).color(color)),
                     );
                 };
                 ui.horizontal(|ui| {
@@ -590,21 +590,11 @@ impl eframe::App for App {
                         &mut self.state.settings.macro_record_hotkey,
                         &mut self.state.macros.capturing_record_hotkey,
                     );
-                    if !self.state.held_keys.is_empty()
-                        || !self.state.held_mouse.is_empty()
-                    {
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                let total = self.state.held_keys.len()
-                                    + self.state.held_mouse.len();
-                                footer_label(
-                                    ui,
-                                    &format!("{} held", total),
-                                    theme::p().accent,
-                                );
-                            },
-                        );
+                    if !self.state.held_keys.is_empty() || !self.state.held_mouse.is_empty() {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let total = self.state.held_keys.len() + self.state.held_mouse.len();
+                            footer_label(ui, &format!("{} held", total), theme::p().accent);
+                        });
                     }
                 });
             });
@@ -613,15 +603,15 @@ impl eframe::App for App {
             self.state.settings.theme = next;
             theme::set_theme(&ctx, next);
             crate::platform::apply_titlebar_theme(next, theme::p());
-            let _ = self.state.settings.save();
+            save_settings(&mut self.state);
         }
         if toggle_changed {
             hk_state::set_toggle_binding(self.state.settings.toggle_hotkey);
-            let _ = self.state.settings.save();
+            save_settings(&mut self.state);
         }
         if record_hotkey_changed {
             hk_state::set_macro_record_binding(self.state.settings.macro_record_hotkey);
-            let _ = self.state.settings.save();
+            save_settings(&mut self.state);
         }
 
         // 30fps repaints while running or recording — but only when the
@@ -633,9 +623,8 @@ impl eframe::App for App {
                 // 30 fps while something is actively happening.
                 ctx.request_repaint_after(Duration::from_millis(33));
             } else {
-                // Slow idle tick so hotkey pulses + diagnostic counters
-                // update even if request_repaint from the LL hook thread
-                // somehow fails to wake egui.
+                // Slow idle tick so hotkey pulses still update if a repaint
+                // request from the input thread is delayed.
                 ctx.request_repaint_after(Duration::from_millis(200));
             }
         }
@@ -644,7 +633,9 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         set_recording(false);
         self.state.settings.interval_ms = self.state.rate.interval_ms;
-        let _ = self.state.settings.save();
+        if let Err(e) = self.state.settings.save() {
+            eprintln!("settings save failed on exit: {e}");
+        }
         if let Some(hooks) = self.hooks.take() {
             hooks.shutdown();
         }
@@ -659,8 +650,17 @@ impl App {
     fn render_content(&mut self, ui: &mut egui::Ui) {
         let cmd_tx = self.cmd_tx.clone();
 
-        let two_col = ui.available_width() >= 540.0
-            && matches!(self.state.tab, Tab::Mouse | Tab::Keyboard);
+        // The selected tab is also the selected action. Without this sync,
+        // switching from Mouse to Keyboard (or Macros) kept the previous tab's
+        // action active until a control was changed manually.
+        let active_action = build_action(&self.state);
+        if !matches!(self.state.tab, Tab::Settings) && active_action != self.state.last_action {
+            self.state.last_action = active_action;
+            let _ = cmd_tx.send(Command::SetAction(active_action));
+        }
+
+        let two_col =
+            ui.available_width() >= 540.0 && matches!(self.state.tab, Tab::Mouse | Tab::Keyboard);
 
         match self.state.tab {
             Tab::Mouse => {
@@ -671,22 +671,15 @@ impl App {
                     self.state.mouse.fixed_x,
                     self.state.mouse.fixed_y,
                     self.state.mouse.mode,
+                    self.state.mouse.repeat_while_toggled,
                 );
 
                 if two_col {
                     symmetric_columns(ui, |cols| {
                         panel_clicker::show(&mut cols[0], &mut self.state.mouse);
-                        panel_rate::show_rate(
-                            &mut cols[1],
-                            &mut self.state.rate,
-                            &cmd_tx,
-                        );
+                        panel_rate::show_rate(&mut cols[1], &mut self.state.rate, &cmd_tx);
                         cols[1].add_space(6.0);
-                        panel_rate::show_stop(
-                            &mut cols[1],
-                            &mut self.state.stop,
-                            &cmd_tx,
-                        );
+                        panel_rate::show_stop(&mut cols[1], &mut self.state.stop, &cmd_tx);
                     });
                 } else {
                     panel_clicker::show(ui, &mut self.state.mouse);
@@ -703,6 +696,7 @@ impl App {
                     self.state.mouse.fixed_x,
                     self.state.mouse.fixed_y,
                     self.state.mouse.mode,
+                    self.state.mouse.repeat_while_toggled,
                 );
                 if before != after {
                     let a = build_action(&self.state);
@@ -719,17 +713,9 @@ impl App {
                 if two_col {
                     symmetric_columns(ui, |cols| {
                         panel_keypress::show(&mut cols[0], &mut self.state.keypress);
-                        panel_rate::show_rate(
-                            &mut cols[1],
-                            &mut self.state.rate,
-                            &cmd_tx,
-                        );
+                        panel_rate::show_rate(&mut cols[1], &mut self.state.rate, &cmd_tx);
                         cols[1].add_space(6.0);
-                        panel_rate::show_stop(
-                            &mut cols[1],
-                            &mut self.state.stop,
-                            &cmd_tx,
-                        );
+                        panel_rate::show_stop(&mut cols[1], &mut self.state.stop, &cmd_tx);
                     });
                 } else {
                     panel_keypress::show(ui, &mut self.state.keypress);

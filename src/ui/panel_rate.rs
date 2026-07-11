@@ -35,10 +35,7 @@ pub fn show_rate(ui: &mut Ui, rate: &mut RateConfig, cmd_tx: &Sender<Command>) {
             nav::segmented(
                 ui,
                 &mut mode,
-                &[
-                    (RateMode::Cps, "CPS"),
-                    (RateMode::Interval, "Interval"),
-                ],
+                &[(RateMode::Cps, "CPS"), (RateMode::Interval, "Interval")],
             );
         });
         rate.use_cps = matches!(mode, RateMode::Cps);
@@ -95,11 +92,7 @@ pub fn show_rate(ui: &mut Ui, rate: &mut RateConfig, cmd_tx: &Sender<Command>) {
                         .range(0..=500)
                         .suffix(" ms"),
                 );
-                ui.label(
-                    RichText::new("To")
-                        .size(12.0)
-                        .color(theme::p().text_faint),
-                );
+                ui.label(RichText::new("To").size(12.0).color(theme::p().text_faint));
                 let mut max = rate.hold_max_ms.max(rate.hold_min_ms);
                 if ui
                     .add(DragValue::new(&mut max).range(0..=500).suffix(" ms"))
@@ -197,7 +190,11 @@ pub fn show_stop(ui: &mut Ui, stop: &mut StopAfter, cmd_tx: &Sender<Command>) {
                 ui.horizontal(|ui| {
                     widgets::row_label(ui, "Stop at");
                     ui.add(DragValue::new(n).range(1..=1_000_000).speed(1.0));
-                    ui.label(RichText::new("Events").size(12.5).color(theme::p().text_muted));
+                    ui.label(
+                        RichText::new("Events")
+                            .size(12.5)
+                            .color(theme::p().text_muted),
+                    );
                 });
             }
             StopAfter::Duration { ms } => {

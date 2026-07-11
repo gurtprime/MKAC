@@ -1,12 +1,13 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 
 use super::command::{
-    Action, Command, EngineEvent, JitterCurve, RateConfig, StopAfter, TriggerMode,
+    Action, ClickPattern, Command, EngineEvent, JitterCurve, RateConfig, StopAfter, TriggerMode,
 };
-use super::macros::Macro;
+use super::macros::{Macro, MacroEvent};
 use super::{keyboard, macros, mouse, virtual_hold::VirtualHold};
 
 /// Minimum gap between macro loops so the last event of loop N doesn't fire
@@ -36,18 +37,10 @@ impl Drop for HiResTimer {
     }
 }
 
+#[derive(Default)]
 pub struct EngineConfig {
     pub rate: RateConfig,
     pub stop_after: StopAfter,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            rate: RateConfig::default(),
-            stop_after: StopAfter::default(),
-        }
-    }
 }
 
 fn compute_interval(rate: &RateConfig) -> Duration {
@@ -75,6 +68,37 @@ struct MacroPlayState {
     frame_idx: usize,
     loops_done: u32,
     loops_target: u32,
+    held_keys: HashSet<u16>,
+    held_mouse_buttons: HashSet<super::command::MouseButton>,
+}
+
+impl MacroPlayState {
+    fn track_event(&mut self, event: &MacroEvent) {
+        match *event {
+            MacroEvent::KeyDown { vk } => {
+                self.held_keys.insert(vk);
+            }
+            MacroEvent::KeyUp { vk } => {
+                self.held_keys.remove(&vk);
+            }
+            MacroEvent::MouseDown { button, .. } => {
+                self.held_mouse_buttons.insert(button);
+            }
+            MacroEvent::MouseUp { button, .. } => {
+                self.held_mouse_buttons.remove(&button);
+            }
+            MacroEvent::MouseMove { .. } => {}
+        }
+    }
+
+    fn release_all(&mut self) {
+        for vk in self.held_keys.drain() {
+            keyboard::key_up(vk);
+        }
+        for button in self.held_mouse_buttons.drain() {
+            mouse::button_up(button);
+        }
+    }
 }
 
 struct RunState {
@@ -97,10 +121,26 @@ impl RunState {
     }
 
     fn stop(&mut self, evt_tx: &Sender<EngineEvent>) {
-        if self.is_running {
-            self.is_running = false;
-            self.macro_state = None;
+        let was_active = self.is_running || self.macro_state.is_some();
+        self.is_running = false;
+        if let Some(mut macro_state) = self.macro_state.take() {
+            macro_state.release_all();
+        }
+        if was_active {
             let _ = evt_tx.try_send(EngineEvent::Stopped);
+        }
+    }
+
+    fn stop_all(&mut self, held: &mut VirtualHold, evt_tx: &Sender<EngineEvent>) {
+        self.stop(evt_tx);
+        let had_keys = !held.held_keys().is_empty();
+        let had_mouse = !held.held_mouse_buttons().is_empty();
+        held.release_all();
+        if had_keys {
+            let _ = evt_tx.try_send(EngineEvent::HeldChanged(Vec::new()));
+        }
+        if had_mouse {
+            let _ = evt_tx.try_send(EngineEvent::MouseHeldChanged(Vec::new()));
         }
     }
 }
@@ -120,8 +160,14 @@ fn start_running(
     // fire spurious clicks. Refuse.
     if matches!(
         action,
-        Action::MouseClick { mode: TriggerMode::Hold, .. }
-            | Action::KeyTap { mode: TriggerMode::Hold, .. }
+        Action::MouseClick {
+            mode: TriggerMode::Hold,
+            repeat_while_toggled: false,
+            ..
+        } | Action::KeyTap {
+            mode: TriggerMode::Hold,
+            ..
+        }
     ) {
         return false;
     }
@@ -134,9 +180,10 @@ fn start_running(
                     frame_idx: 0,
                     loops_done: 0,
                     loops_target: macro_loops,
+                    held_keys: HashSet::new(),
+                    held_mouse_buttons: HashSet::new(),
                 });
-                rs.next_tick =
-                    Instant::now() + Duration::from_millis(m.frames[0].delta_ms as u64);
+                rs.next_tick = Instant::now() + Duration::from_millis(m.frames[0].delta_ms as u64);
             }
             _ => {
                 // No valid macro — refuse to start so the UI doesn't see a
@@ -157,25 +204,31 @@ fn start_running(
 }
 
 pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
-    // Request 1ms timer resolution so sub-16ms tick intervals actually fire
-    // on time. Without this Windows caps sleep granularity at ~15.6 ms,
-    // which in turn caps our effective CPS at ~64. Released at shutdown.
-    let _hi_res_timer = HiResTimer::acquire();
-
     let mut cfg = EngineConfig::default();
     let mut action = Action::default();
     let mut rs = RunState::new();
     let mut held = VirtualHold::default();
     let mut loaded_macro: Option<Arc<Macro>> = None;
     let mut macro_loops: u32 = 1;
+    // Keep the process timer resolution at its normal idle value. The 1 ms
+    // request is needed only while an auto action or macro is running.
+    let mut hi_res_timer: Option<HiResTimer> = None;
 
     loop {
+        if rs.is_running {
+            if hi_res_timer.is_none() {
+                hi_res_timer = Some(HiResTimer::acquire());
+            }
+        } else {
+            hi_res_timer = None;
+        }
+
         let cmd = if rs.is_running {
             match cmd_rx.recv_deadline(rs.next_tick) {
                 Ok(c) => Some(c),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => {
-                    held.release_all();
+                    rs.stop_all(&mut held, &evt_tx);
                     return;
                 }
             }
@@ -183,7 +236,7 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
             match cmd_rx.recv() {
                 Ok(c) => Some(c),
                 Err(_) => {
-                    held.release_all();
+                    rs.stop_all(&mut held, &evt_tx);
                     return;
                 }
             }
@@ -194,24 +247,50 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
                 Command::Start => {
                     start_running(&mut rs, &action, &loaded_macro, macro_loops, &cfg, &evt_tx);
                 }
-                Command::Stop => rs.stop(&evt_tx),
+                Command::Stop => rs.stop_all(&mut held, &evt_tx),
                 Command::Toggle => {
                     // When the configured action is in Hold mode, the hotkey
                     // latches/unlatches the target instead of starting a loop.
                     match action {
-                        Action::MouseClick { mode: TriggerMode::Hold, button, .. } => {
+                        Action::MouseClick {
+                            mode: TriggerMode::Hold,
+                            repeat_while_toggled: false,
+                            button,
+                            ..
+                        } => {
                             held.toggle_mouse(button);
-                            let _ = evt_tx.try_send(EngineEvent::MouseHeldChanged(
-                                held.held_mouse_buttons(),
-                            ));
+                            let _ = evt_tx
+                                .try_send(EngineEvent::MouseHeldChanged(held.held_mouse_buttons()));
                         }
-                        Action::KeyTap { mode: TriggerMode::Hold, vk, .. } => {
-                            held.toggle(vk);
+                        Action::MouseClick {
+                            mode: TriggerMode::Hold,
+                            repeat_while_toggled: true,
+                            ..
+                        } => {
+                            if rs.is_running {
+                                rs.stop_all(&mut held, &evt_tx);
+                            } else {
+                                start_running(
+                                    &mut rs,
+                                    &action,
+                                    &loaded_macro,
+                                    macro_loops,
+                                    &cfg,
+                                    &evt_tx,
+                                );
+                            }
+                        }
+                        Action::KeyTap {
+                            mode: TriggerMode::Hold,
+                            vk,
+                            mods,
+                        } => {
+                            held.toggle_combo(vk, mods);
                             let _ = evt_tx.try_send(EngineEvent::HeldChanged(held.held_keys()));
                         }
                         _ => {
                             if rs.is_running {
-                                rs.stop(&evt_tx);
+                                rs.stop_all(&mut held, &evt_tx);
                             } else {
                                 start_running(
                                     &mut rs,
@@ -229,18 +308,11 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
                     action = a;
                     // Swapping to a Hold action mid-loop would keep ticking
                     // clicks — stop first.
-                    if matches!(
-                        action,
-                        Action::MouseClick { mode: TriggerMode::Hold, .. }
-                            | Action::KeyTap { mode: TriggerMode::Hold, .. }
-                    ) {
-                        rs.stop(&evt_tx);
-                    }
-                    if !matches!(action, Action::PlayMacro) {
-                        rs.macro_state = None;
-                    }
+                    // Any action change invalidates generated held state and
+                    // must stop the previous action before adopting the new one.
+                    rs.stop_all(&mut held, &evt_tx);
                 }
-                Command::SetRate(r) => cfg.rate = r,
+                Command::SetRate(r) => cfg.rate = r.normalized(),
                 Command::SetStopAfter(s) => cfg.stop_after = s,
                 Command::LoadMacro(m) => loaded_macro = Some(m),
                 Command::SetMacroLoops(n) => {
@@ -251,10 +323,14 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
                 }
                 Command::ClearMacro => {
                     loaded_macro = None;
-                    rs.macro_state = None;
+                    // Deleting a library item must not stop an unrelated
+                    // mouse/keyboard action that happens to be running.
+                    if matches!(action, Action::PlayMacro) {
+                        rs.stop_all(&mut held, &evt_tx);
+                    }
                 }
                 Command::Shutdown => {
-                    held.release_all();
+                    rs.stop_all(&mut held, &evt_tx);
                     return;
                 }
             }
@@ -263,6 +339,14 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
 
         // Tick dispatch (no command pending, deadline reached)
         if !rs.is_running || Instant::now() < rs.next_tick {
+            continue;
+        }
+
+        // Check the deadline before dispatching the next event as well as
+        // after it. This prevents a long macro gap or slow input call from
+        // producing one event after a duration limit has elapsed.
+        if should_stop(&cfg.stop_after, &rs) {
+            rs.stop_all(&mut held, &evt_tx);
             continue;
         }
 
@@ -279,73 +363,97 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
         };
         match action {
             // Auto mode drives the tick loop.
-            Action::MouseClick { button, pattern, target, mode: TriggerMode::Auto } => {
+            Action::MouseClick {
+                button,
+                pattern,
+                target,
+                mode: TriggerMode::Auto,
+                ..
+            } => {
                 mouse::click(button, pattern, target, hold_ms);
             }
-            Action::KeyTap { vk, mods, mode: TriggerMode::Auto } => {
+            Action::MouseClick {
+                button,
+                target,
+                mode: TriggerMode::Hold,
+                repeat_while_toggled: true,
+                ..
+            } => {
+                // Some game clients accept discrete clicks but discard a
+                // synthetic persistent button-down state.
+                mouse::click(button, ClickPattern::Single, target, hold_ms);
+            }
+            Action::KeyTap {
+                vk,
+                mods,
+                mode: TriggerMode::Auto,
+            } => {
                 keyboard::key_tap(vk, mods, hold_ms);
             }
             // Hold mode shouldn't reach the tick loop — but if a late
             // SetAction swapped us, stop safely instead of firing clicks.
             Action::MouseClick { .. } | Action::KeyTap { .. } => {
-                rs.stop(&evt_tx);
+                rs.stop_all(&mut held, &evt_tx);
                 continue;
             }
             Action::PlayMacro => {
-                if let Some(ref mut ms) = rs.macro_state {
-                    let m = ms.macro_ref.clone();
-                    if m.frames.is_empty() {
-                        rs.stop(&evt_tx);
-                        continue;
-                    }
-                    if ms.frame_idx < m.frames.len() {
-                        macros::play_event(&m.frames[ms.frame_idx].event);
-                        ms.frame_idx += 1;
-                    }
-                    let mut wrapped = false;
-                    if ms.frame_idx >= m.frames.len() {
-                        ms.loops_done += 1;
-                        if ms.loops_target > 0 && ms.loops_done >= ms.loops_target {
-                            rs.tick_count = rs.tick_count.wrapping_add(1);
-                            rs.is_running = false;
-                            rs.macro_state = None;
-                            let _ = evt_tx.try_send(EngineEvent::Stopped);
-                            continue;
-                        }
-                        ms.frame_idx = 0;
-                        wrapped = true;
-                    }
-                    let delta_ms = m.frames[ms.frame_idx].delta_ms.max(1) as u64;
-                    let delta = if wrapped {
-                        // Avoid zero-delay loop restarts that chain recorded
-                        // frames back-to-back across loop boundaries.
-                        Duration::from_millis(delta_ms).max(MACRO_LOOP_GAP)
-                    } else {
-                        Duration::from_millis(delta_ms)
-                    };
-                    rs.tick_count = rs.tick_count.wrapping_add(1);
-                    rs.next_tick = Instant::now() + delta;
-                    continue;
-                } else {
+                let Some(mut ms) = rs.macro_state.take() else {
                     // No macro loaded: stop.
-                    rs.stop(&evt_tx);
+                    rs.stop_all(&mut held, &evt_tx);
+                    continue;
+                };
+                let m = ms.macro_ref.clone();
+                if m.frames.is_empty() {
+                    ms.release_all();
+                    rs.is_running = false;
+                    let _ = evt_tx.try_send(EngineEvent::Stopped);
                     continue;
                 }
+                if ms.frame_idx < m.frames.len() {
+                    let event = m.frames[ms.frame_idx].event;
+                    macros::play_event(&event);
+                    ms.track_event(&event);
+                    ms.frame_idx += 1;
+                }
+
+                rs.tick_count = rs.tick_count.wrapping_add(1);
+                if should_stop(&cfg.stop_after, &rs) {
+                    ms.release_all();
+                    rs.is_running = false;
+                    let _ = evt_tx.try_send(EngineEvent::Stopped);
+                    continue;
+                }
+
+                let mut wrapped = false;
+                if ms.frame_idx >= m.frames.len() {
+                    ms.loops_done += 1;
+                    if ms.loops_target > 0 && ms.loops_done >= ms.loops_target {
+                        ms.release_all();
+                        rs.is_running = false;
+                        let _ = evt_tx.try_send(EngineEvent::Stopped);
+                        continue;
+                    }
+                    ms.frame_idx = 0;
+                    wrapped = true;
+                }
+                let delta_ms = m.frames[ms.frame_idx].delta_ms.max(1) as u64;
+                let delta = if wrapped {
+                    // Avoid zero-delay loop restarts that chain recorded
+                    // frames back-to-back across loop boundaries.
+                    Duration::from_millis(delta_ms).max(MACRO_LOOP_GAP)
+                } else {
+                    Duration::from_millis(delta_ms)
+                };
+                rs.next_tick = Instant::now() + delta;
+                rs.macro_state = Some(ms);
+                continue;
             }
         }
 
         rs.tick_count = rs.tick_count.wrapping_add(1);
 
-        let should_stop = match cfg.stop_after {
-            StopAfter::Never => false,
-            StopAfter::Count { n } => rs.tick_count >= n,
-            StopAfter::Duration { ms } => {
-                Instant::now().duration_since(rs.start_time).as_millis() as u64 >= ms
-            }
-        };
-        if should_stop {
-            rs.is_running = false;
-            let _ = evt_tx.try_send(EngineEvent::Stopped);
+        if should_stop(&cfg.stop_after, &rs) {
+            rs.stop_all(&mut held, &evt_tx);
             continue;
         }
 
@@ -355,5 +463,13 @@ pub fn run(cmd_rx: Receiver<Command>, evt_tx: Sender<EngineEvent>) {
         if rs.next_tick < now {
             rs.next_tick = now + step;
         }
+    }
+}
+
+fn should_stop(stop_after: &StopAfter, rs: &RunState) -> bool {
+    match *stop_after {
+        StopAfter::Never => false,
+        StopAfter::Count { n } => n > 0 && rs.tick_count >= n,
+        StopAfter::Duration { ms } => rs.start_time.elapsed().as_millis() as u64 >= ms,
     }
 }

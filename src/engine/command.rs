@@ -17,7 +17,7 @@ pub struct KeyMods {
     pub win: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum MouseButton {
     #[default]
     Left,
@@ -66,6 +66,11 @@ pub enum Action {
         target: Target,
         #[serde(default)]
         mode: TriggerMode,
+        /// When true, Hold mode toggles a click loop instead of relying on a
+        /// persistent OS mouse-button state. Useful for games that accept
+        /// clicks but discard synthetic button holds.
+        #[serde(default)]
+        repeat_while_toggled: bool,
     },
     KeyTap {
         vk: u16,
@@ -84,6 +89,7 @@ impl Default for Action {
             pattern: ClickPattern::Single,
             target: Target::Cursor,
             mode: TriggerMode::Auto,
+            repeat_while_toggled: false,
         }
     }
 }
@@ -171,11 +177,17 @@ pub struct HotkeyBinding {
 
 impl HotkeyBinding {
     pub fn new(vk: u16) -> Self {
-        Self { vk, ctrl: false, shift: false, alt: false, win: false }
+        Self {
+            vk,
+            ctrl: false,
+            shift: false,
+            alt: false,
+            win: false,
+        }
     }
 
     pub fn is_set(&self) -> bool {
-        self.vk != 0
+        (1..=0xFF).contains(&self.vk)
     }
 
     pub fn pack(&self) -> u32 {
@@ -238,10 +250,66 @@ pub enum EngineEvent {
 impl RateConfig {
     pub fn base_interval(&self) -> Duration {
         let ms = if self.use_cps {
-            (1000.0 / self.cps.max(0.1)) as u64
+            let cps = if self.cps.is_finite() {
+                self.cps.clamp(0.1, 200.0)
+            } else {
+                10.0
+            };
+            (1000.0 / cps).round() as u64
         } else {
-            self.interval_ms
+            self.interval_ms.clamp(1, 60_000)
         };
         Duration::from_millis(ms.max(1))
+    }
+
+    /// Normalize values loaded from older or manually edited config data
+    /// before they reach the timing loop.
+    pub fn normalized(mut self) -> Self {
+        self.interval_ms = self.interval_ms.clamp(1, 60_000);
+        self.cps = if self.cps.is_finite() {
+            self.cps.clamp(0.1, 200.0)
+        } else {
+            10.0
+        };
+        self.jitter_max_ms = self.jitter_max_ms.min(5_000);
+        self.hold_min_ms = self.hold_min_ms.min(500);
+        self.hold_max_ms = self.hold_max_ms.clamp(self.hold_min_ms, 500);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HotkeyBinding, RateConfig};
+
+    #[test]
+    fn hotkey_pack_round_trips_modifiers() {
+        let binding = HotkeyBinding {
+            vk: 0x2E,
+            ctrl: true,
+            shift: false,
+            alt: true,
+            win: true,
+        };
+        assert_eq!(HotkeyBinding::unpack(binding.pack()), Some(binding));
+    }
+
+    #[test]
+    fn invalid_rate_values_are_bounded() {
+        let rate = RateConfig {
+            interval_ms: u64::MAX,
+            cps: f32::NAN,
+            jitter_max_ms: u32::MAX,
+            hold_min_ms: 900,
+            hold_max_ms: 1,
+            ..RateConfig::default()
+        }
+        .normalized();
+
+        assert_eq!(rate.interval_ms, 60_000);
+        assert_eq!(rate.cps, 10.0);
+        assert_eq!(rate.jitter_max_ms, 5_000);
+        assert_eq!(rate.hold_min_ms, 500);
+        assert_eq!(rate.hold_max_ms, 500);
     }
 }

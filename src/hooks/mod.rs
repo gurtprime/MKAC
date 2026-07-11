@@ -5,7 +5,7 @@ pub mod recording;
 
 use std::thread::{self, JoinHandle};
 
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use crate::engine::Command;
@@ -49,10 +49,23 @@ impl HookHandle {
             .expect("spawn hook thread");
 
         let thread_id = tid_rx.recv().expect("hook thread id");
-        Self { thread_id, thread: Some(thread), record_rx: rec_rx }
+        Self {
+            thread_id,
+            thread: Some(thread),
+            record_rx: rec_rx,
+        }
     }
 
     pub fn shutdown(mut self) {
+        hotkey::post_quit(self.thread_id);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for HookHandle {
+    fn drop(&mut self) {
         hotkey::post_quit(self.thread_id);
         if let Some(t) = self.thread.take() {
             let _ = t.join();

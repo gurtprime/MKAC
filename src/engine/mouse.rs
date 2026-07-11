@@ -1,10 +1,15 @@
-use windows::Win32::Foundation::POINT;
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_MOUSE, MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
     MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-    MOUSEINPUT, SendInput,
+    MOUSEINPUT, MOUSE_EVENT_FLAGS,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, GetForegroundWindow, PostMessageW, SetCursorPos, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP,
+};
 
 use super::command::{ClickPattern, MouseButton, Target};
 
@@ -92,6 +97,58 @@ pub fn button_up(button: MouseButton) {
     unsafe {
         SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
     }
+}
+
+/// Hold-mode mouse injection for games that do not preserve injected mouse
+/// state from `SendInput`. Returns the target HWND so release can be delivered
+/// to the same game even if focus changes before the toggle-off hotkey.
+pub fn hold_button_down(button: MouseButton) -> isize {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        button_down(button);
+        return 0;
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    let _ = unsafe { GetCursorPos(&mut point) };
+    let _ = unsafe { ScreenToClient(hwnd, &mut point) };
+    let message = match button {
+        MouseButton::Left => WM_LBUTTONDOWN,
+        MouseButton::Right => WM_RBUTTONDOWN,
+        MouseButton::Middle => WM_MBUTTONDOWN,
+    };
+    let wparam = WPARAM(match button {
+        MouseButton::Left => 0x0001,
+        MouseButton::Right => 0x0002,
+        MouseButton::Middle => 0x0010,
+    });
+    let lparam = pack_mouse_point(point);
+    if unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) }.is_ok() {
+        hwnd.0 as isize
+    } else {
+        button_down(button);
+        0
+    }
+}
+
+pub fn hold_button_up(button: MouseButton, target: isize) {
+    if target == 0 {
+        button_up(button);
+        return;
+    }
+    let hwnd = HWND(target as *mut _);
+    let message = match button {
+        MouseButton::Left => WM_LBUTTONUP,
+        MouseButton::Right => WM_RBUTTONUP,
+        MouseButton::Middle => WM_MBUTTONUP,
+    };
+    let _ = unsafe { PostMessageW(Some(hwnd), message, WPARAM(0), LPARAM(0)) };
+}
+
+fn pack_mouse_point(point: POINT) -> LPARAM {
+    let x = (point.x as i16 as u16) as u32;
+    let y = (point.y as i16 as u16) as u32;
+    LPARAM((x | (y << 16)) as isize)
 }
 
 pub fn set_cursor(x: i32, y: i32) {

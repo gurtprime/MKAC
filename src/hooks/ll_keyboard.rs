@@ -2,13 +2,13 @@ use std::sync::atomic::Ordering;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, SetWindowsHookExW, WH_KEYBOARD_LL,
+    CallNextHookEx, SetWindowsHookExW, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, WH_KEYBOARD_LL,
     WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::engine::macros::MacroEvent;
 use crate::hooks::hotkey;
-use crate::hooks::recording::{IS_RECORDING, push};
+use crate::hooks::recording::{push, IS_RECORDING};
 
 /// LL keyboard hook. Hotkey dispatch is handled by RegisterHotKey on the
 /// hook thread now — this proc only captures key events for macro recording.

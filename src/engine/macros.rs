@@ -35,8 +35,21 @@ fn default_schema() -> u32 {
 
 impl Macro {
     pub fn new(name: impl Into<String>, frames: Vec<MacroFrame>) -> Self {
-        let total_duration_ms = frames.iter().map(|f| f.delta_ms as u64).sum();
-        Self { schema: 1, name: name.into(), frames, total_duration_ms }
+        let total_duration_ms = frames.iter().fold(0u64, |total, frame| {
+            total.saturating_add(frame.delta_ms as u64)
+        });
+        Self {
+            schema: 1,
+            name: name.into(),
+            frames,
+            total_duration_ms,
+        }
+    }
+
+    pub fn recompute_duration(&mut self) {
+        self.total_duration_ms = self.frames.iter().fold(0u64, |total, frame| {
+            total.saturating_add(frame.delta_ms as u64)
+        });
     }
 }
 
@@ -55,5 +68,36 @@ pub fn play_event(event: &MacroEvent) {
         MacroEvent::MouseMove { x, y } => {
             mouse::set_cursor(x, y);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Macro, MacroEvent, MacroFrame};
+    use crate::engine::MouseButton;
+
+    #[test]
+    fn duration_is_saturating_and_recomputable() {
+        let mut m = Macro::new(
+            "test",
+            vec![
+                MacroFrame {
+                    delta_ms: u32::MAX,
+                    event: MacroEvent::MouseMove { x: 0, y: 0 },
+                },
+                MacroFrame {
+                    delta_ms: 10,
+                    event: MacroEvent::MouseDown {
+                        button: MouseButton::Left,
+                        x: 0,
+                        y: 0,
+                    },
+                },
+            ],
+        );
+        assert_eq!(m.total_duration_ms, u32::MAX as u64 + 10);
+        m.total_duration_ms = 0;
+        m.recompute_duration();
+        assert_eq!(m.total_duration_ms, u32::MAX as u64 + 10);
     }
 }

@@ -1,15 +1,15 @@
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::OnceLock;
 use std::thread::{self, Thread};
 
 use crossbeam_channel::Sender;
 use windows::Win32::Foundation::{LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN, RegisterHotKey,
-    UnregisterHotKey,
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+    MOD_SHIFT, MOD_WIN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_APP, WM_HOTKEY,
+    DispatchMessageW, GetMessageW, PostThreadMessageW, TranslateMessage, MSG, WM_APP, WM_HOTKEY,
     WM_QUIT,
 };
 
@@ -33,15 +33,13 @@ static CMD_SENDER: OnceLock<Sender<Command>> = OnceLock::new();
 /// thread — we signal the hook thread to do it).
 static HOOK_THREAD_ID: OnceLock<u32> = OnceLock::new();
 
-/// Handle to the dedicated waker thread. LL hook callbacks unpark it when
+/// Handle to the dedicated waker thread. Input callbacks unpark it when
 /// a hotkey fires; it then calls `request_repaint` on the egui context from
 /// a non-hook context. Keeping `request_repaint` out of the hook callback
 /// is critical — egui's Context is an `Arc<RwLock<..>>`, and acquiring the
-/// write lock mid-frame can stall for tens of ms. An LL hook callback that
-/// stalls risks Windows silently unregistering the hook (300ms timeout on
-/// Win7+), and we suspect the "works unfocused, fails focused" bug is
-/// exactly this: a focused MKAC renders at 30fps while the hook is trying
-/// to wake it, races on the lock, and gets dropped.
+/// write lock mid-frame can stall for tens of ms. An input callback that
+/// stalls risk Windows silently unregistering the hook (300ms timeout on
+/// Win7+), so the callback path remains intentionally tiny.
 static WAKER_THREAD: OnceLock<Thread> = OnceLock::new();
 static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -93,12 +91,7 @@ pub fn set_macro_record_binding(b: HotkeyBinding) {
 fn poke_hook_thread_to_reregister() {
     if let Some(&tid) = HOOK_THREAD_ID.get() {
         unsafe {
-            let _ = PostThreadMessageW(
-                tid,
-                WM_REREGISTER_HOTKEYS,
-                WPARAM(0),
-                LPARAM(0),
-            );
+            let _ = PostThreadMessageW(tid, WM_REREGISTER_HOTKEYS, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -136,27 +129,39 @@ fn register_hotkeys_on_this_thread() {
     if REBIND_ACTIVE.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(b) = HotkeyBinding::unpack(TOGGLE_BINDING.load(Ordering::Relaxed)) {
-        if b.is_set() {
-            unsafe {
-                let _ = RegisterHotKey(
-                    None,
-                    HOTKEY_ID_TOGGLE,
-                    hotkey_binding_to_mods(&b),
-                    b.vk as u32,
-                );
-            }
+    let toggle = HotkeyBinding::unpack(TOGGLE_BINDING.load(Ordering::Relaxed));
+    let record = HotkeyBinding::unpack(MACRO_RECORD_BINDING.load(Ordering::Relaxed));
+
+    if let Some(b) = toggle.filter(HotkeyBinding::is_set) {
+        let result = unsafe {
+            RegisterHotKey(
+                None,
+                HOTKEY_ID_TOGGLE,
+                hotkey_binding_to_mods(&b),
+                b.vk as u32,
+            )
+        };
+        if result.is_err() {
+            eprintln!("toggle hotkey registration failed for VK 0x{:02X}", b.vk);
         }
     }
-    if let Some(b) = HotkeyBinding::unpack(MACRO_RECORD_BINDING.load(Ordering::Relaxed)) {
-        if b.is_set() {
-            unsafe {
-                let _ = RegisterHotKey(
+
+    // Windows refuses two registrations for the same combination. Treat an
+    // identical toggle/record binding as one registration and dispatch both
+    // actions from that single WM_HOTKEY message instead of silently losing
+    // the record hotkey.
+    if let Some(b) = record.filter(HotkeyBinding::is_set) {
+        if Some(b) != toggle {
+            let result = unsafe {
+                RegisterHotKey(
                     None,
                     HOTKEY_ID_RECORD,
                     hotkey_binding_to_mods(&b),
                     b.vk as u32,
-                );
+                )
+            };
+            if result.is_err() {
+                eprintln!("record hotkey registration failed for VK 0x{:02X}", b.vk);
             }
         }
     }
@@ -225,15 +230,14 @@ pub fn pump_messages() {
         }
         match msg.message {
             WM_HOTKEY => match msg.wParam.0 as i32 {
-                HOTKEY_ID_TOGGLE => {
-                    if !REBIND_ACTIVE.load(Ordering::Relaxed) {
-                        dispatch_toggle();
-                    }
-                }
-                HOTKEY_ID_RECORD => {
-                    if !REBIND_ACTIVE.load(Ordering::Relaxed) {
+                HOTKEY_ID_TOGGLE if !REBIND_ACTIVE.load(Ordering::Relaxed) => {
+                    dispatch_toggle();
+                    if same_binding() {
                         dispatch_macro_record();
                     }
+                }
+                HOTKEY_ID_RECORD if !REBIND_ACTIVE.load(Ordering::Relaxed) => {
+                    dispatch_macro_record();
                 }
                 _ => {}
             },
@@ -250,6 +254,11 @@ pub fn pump_messages() {
         let _ = UnregisterHotKey(None, HOTKEY_ID_TOGGLE);
         let _ = UnregisterHotKey(None, HOTKEY_ID_RECORD);
     }
+}
+
+fn same_binding() -> bool {
+    TOGGLE_BINDING.load(Ordering::Relaxed) != 0
+        && TOGGLE_BINDING.load(Ordering::Relaxed) == MACRO_RECORD_BINDING.load(Ordering::Relaxed)
 }
 
 pub fn post_quit(thread_id: u32) {

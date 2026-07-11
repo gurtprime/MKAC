@@ -11,8 +11,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use image::RgbaImage;
 use image::imageops::FilterType;
+use image::RgbaImage;
 
 const SOURCE: &str = "assets/app.png";
 /// Runtime icon size — big enough for tray (32) + window icon HiDPI (64).
@@ -48,12 +48,9 @@ fn main() {
     // Multi-size ICO for the embedded exe resource.
     let mut icon_dir = ico::IconDir::new(ico::ResourceType::Icon);
     for &size in ICO_SIZES {
-        let resized =
-            image::imageops::resize(&prepped, size, size, FilterType::Lanczos3);
+        let resized = image::imageops::resize(&prepped, size, size, FilterType::Lanczos3);
         let img = ico::IconImage::from_rgba_data(size, size, resized.into_raw());
-        icon_dir.add_entry(
-            ico::IconDirEntry::encode(&img).expect("ico entry encode"),
-        );
+        icon_dir.add_entry(ico::IconDirEntry::encode(&img).expect("ico entry encode"));
     }
     let ico_path = out_dir.join("app.ico");
     {
@@ -62,10 +59,19 @@ fn main() {
         icon_dir.write(&mut file).expect("write app.ico");
     }
 
-    // Embed the ICO as a Win32 resource so Explorer/taskbar pick it up.
+    // Embed the ICO as a Win32 resource so Explorer/taskbar pick it up,
+    // plus VERSIONINFO metadata so SmartScreen / file-properties show a
+    // real name instead of "Unknown publisher". Version numbers come
+    // automatically from Cargo.toml via winresource.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico_path.to_str().expect("ico path utf8"));
+        res.set("FileDescription", "MKAC — Mouse & Keyboard Auto Clicker");
+        res.set("ProductName", "MKAC");
+        res.set("CompanyName", "Gurt");
+        res.set("LegalCopyright", "Copyright (C) 2026 Gurt. MIT licensed.");
+        res.set("OriginalFilename", "mkac.exe");
+        res.set("InternalName", "mkac");
         res.compile().expect("winresource compile");
     }
 }
@@ -106,13 +112,11 @@ fn normalize(img: &RgbaImage) -> RgbaImage {
 
     let crop_w = max_x - min_x + 1;
     let crop_h = max_y - min_y + 1;
-    let cropped =
-        image::imageops::crop_imm(img, min_x, min_y, crop_w, crop_h).to_image();
+    let cropped = image::imageops::crop_imm(img, min_x, min_y, crop_w, crop_h).to_image();
 
     let side = crop_w.max(crop_h);
     let canvas_side = ((side as f32) / (1.0 - 2.0 * CONTENT_MARGIN)).ceil() as u32;
-    let mut canvas =
-        RgbaImage::from_pixel(canvas_side, canvas_side, image::Rgba([0, 0, 0, 0]));
+    let mut canvas = RgbaImage::from_pixel(canvas_side, canvas_side, image::Rgba([0, 0, 0, 0]));
     let ox = (canvas_side - crop_w) / 2;
     let oy = (canvas_side - crop_h) / 2;
     image::imageops::overlay(&mut canvas, &cropped, ox as i64, oy as i64);

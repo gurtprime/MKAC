@@ -1,6 +1,6 @@
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MapVirtualKeyW, SendInput, VIRTUAL_KEY,
+    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY,
 };
 
 use crate::engine::command::KeyMods;
@@ -101,8 +101,7 @@ pub fn key_tap(vk: u16, mods: KeyMods, hold_ms: u32) {
     if mods.ctrl {
         push_up(make_input(VK_CONTROL, true));
     }
-    let up: &[INPUT] =
-        unsafe { std::slice::from_raw_parts(up_buf.as_ptr() as *const INPUT, m) };
+    let up: &[INPUT] = unsafe { std::slice::from_raw_parts(up_buf.as_ptr() as *const INPUT, m) };
     unsafe {
         SendInput(up, std::mem::size_of::<INPUT>() as i32);
     }

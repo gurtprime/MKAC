@@ -24,8 +24,8 @@ I wanted a very lightweight and optimized autoclicker that still feels modern fo
 
 - **Autoclick** — left / right / middle, 1× / 2× / 3×, at a fixed interval or a target CPS.
 - **Autopress** — any key (or combo with Ctrl / Shift / Alt / Win), same rate controls. Pick the key by clicking the chip and pressing it on the keyboard.
-- **Hold mode** — same hotkey, different behavior: instead of looping, it latches the key or mouse button down until you press the hotkey again.
-- **Macros** — record keyboard + mouse events with timing, name the recording, replay any number of loops. Start/stop recording with a dedicated hotkey (default `F8`); record-hotkey presses register only while MKAC isn't the focused window.
+- **Hold mode** — same hotkey, different behavior: keyboard and physical mouse holds latch until toggled off; mouse **Repeat** behavior sends discrete clicks at the configured rate for games that do not preserve synthetic button holds.
+- **Macros** — record keyboard + mouse events with timing, name the recording, replay any number of loops. Start/stop recording with a dedicated hotkey (default `F8`).
 - **Rate shaping** — constant cadence, uniform jitter, or a gaussian curve for human-ish timing. Optional random per-event hold-duration range.
 - **Stop conditions** — run forever, stop after N events, or stop after a duration.
 - **Tray + autostart** — minimize-to-tray, auto-launch with Windows, compact fixed window or experimental resizable mode.
@@ -67,7 +67,7 @@ The project ships a `build.bat` wrapper that sources `vcvars64.bat` automaticall
 ## Stack
 
 - **UI**: [`eframe`](https://github.com/emilk/egui) + [`egui`](https://github.com/emilk/egui) on the glow backend (no bundled default fonts — we ship Inter instead)
-- **Input**: raw Win32 `SendInput` for all mouse/keyboard output; `WH_KEYBOARD_LL` + `WH_MOUSE_LL` for hotkey capture and macro recording
+- **Input**: `RegisterHotKey` for focus-independent global commands, raw Win32 `SendInput` for output, and `WH_KEYBOARD_LL` + `WH_MOUSE_LL` for macro recording
 - **Threads**: UI thread ⇄ engine thread ⇄ hook thread, coordinated with `crossbeam-channel`
 - **Fonts**: Inter (SemiBold + Medium), embedded
 - **Tray**: [`tray-icon`](https://github.com/tauri-apps/tray-icon)

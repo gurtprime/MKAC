@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
 use tray_icon::{
-    Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 
 pub const ID_SHOW: &str = "mkac.show";

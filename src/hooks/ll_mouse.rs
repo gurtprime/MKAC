@@ -1,17 +1,17 @@
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, HHOOK, LLMHF_INJECTED, MSLLHOOKSTRUCT, SetWindowsHookExW, WH_MOUSE_LL,
+    CallNextHookEx, SetWindowsHookExW, HHOOK, LLMHF_INJECTED, MSLLHOOKSTRUCT, WH_MOUSE_LL,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN,
     WM_RBUTTONUP,
 };
 
 use crate::engine::command::MouseButton;
 use crate::engine::macros::MacroEvent;
-use crate::hooks::recording::{IS_RECORDING, push};
+use crate::hooks::recording::{push, IS_RECORDING};
 
 /// Max MouseMove sample rate during recording (~100 Hz). Windows fires
 /// WM_MOUSEMOVE on every sub-pixel movement; recording all of them would
@@ -30,12 +30,36 @@ pub unsafe extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) ->
         if !injected {
             let (x, y) = (ms.pt.x, ms.pt.y);
             let event = match wparam.0 as u32 {
-                WM_LBUTTONDOWN => Some(MacroEvent::MouseDown { button: MouseButton::Left, x, y }),
-                WM_LBUTTONUP => Some(MacroEvent::MouseUp { button: MouseButton::Left, x, y }),
-                WM_RBUTTONDOWN => Some(MacroEvent::MouseDown { button: MouseButton::Right, x, y }),
-                WM_RBUTTONUP => Some(MacroEvent::MouseUp { button: MouseButton::Right, x, y }),
-                WM_MBUTTONDOWN => Some(MacroEvent::MouseDown { button: MouseButton::Middle, x, y }),
-                WM_MBUTTONUP => Some(MacroEvent::MouseUp { button: MouseButton::Middle, x, y }),
+                WM_LBUTTONDOWN => Some(MacroEvent::MouseDown {
+                    button: MouseButton::Left,
+                    x,
+                    y,
+                }),
+                WM_LBUTTONUP => Some(MacroEvent::MouseUp {
+                    button: MouseButton::Left,
+                    x,
+                    y,
+                }),
+                WM_RBUTTONDOWN => Some(MacroEvent::MouseDown {
+                    button: MouseButton::Right,
+                    x,
+                    y,
+                }),
+                WM_RBUTTONUP => Some(MacroEvent::MouseUp {
+                    button: MouseButton::Right,
+                    x,
+                    y,
+                }),
+                WM_MBUTTONDOWN => Some(MacroEvent::MouseDown {
+                    button: MouseButton::Middle,
+                    x,
+                    y,
+                }),
+                WM_MBUTTONUP => Some(MacroEvent::MouseUp {
+                    button: MouseButton::Middle,
+                    x,
+                    y,
+                }),
                 WM_MOUSEMOVE => {
                     let epoch = MOVE_EPOCH.get_or_init(Instant::now);
                     let now_ms = epoch.elapsed().as_millis() as u64;

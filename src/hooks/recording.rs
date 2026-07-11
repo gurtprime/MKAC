@@ -1,5 +1,5 @@
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use crossbeam_channel::Sender;
@@ -26,6 +26,9 @@ pub fn install_channel(tx: Sender<RecEvent>) {
 
 pub fn push(event: MacroEvent) {
     if let Some(tx) = EVENT_SENDER.get() {
-        let _ = tx.try_send(RecEvent { at: Instant::now(), event });
+        let _ = tx.try_send(RecEvent {
+            at: Instant::now(),
+            event,
+        });
     }
 }

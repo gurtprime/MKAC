@@ -1,12 +1,12 @@
 //! Thin Win32 shims used by the UI layer. Kept here so the rest of the code
 //! stays platform-agnostic at the surface.
 
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+    DwmSetWindowAttribute, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
 };
 use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-use windows::core::PCWSTR;
 
 use crate::ui::theme::{Palette, Theme};
 
@@ -41,9 +41,7 @@ pub fn apply_titlebar_theme(theme: Theme, pal: &Palette) {
 
     // COLORREF is 0x00BBGGRR — Windows expects BGR packing.
     let bg = pal.bg;
-    let col = COLORREF(
-        (bg.r() as u32) | ((bg.g() as u32) << 8) | ((bg.b() as u32) << 16),
-    );
+    let col = COLORREF((bg.r() as u32) | ((bg.g() as u32) << 8) | ((bg.b() as u32) << 16));
     unsafe {
         let _ = DwmSetWindowAttribute(
             hwnd,

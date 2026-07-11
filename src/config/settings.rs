@@ -83,7 +83,7 @@ impl Settings {
         let _ = super::ensure_dirs();
         if let Some(path) = settings_path() {
             let data = serde_json::to_string_pretty(self)?;
-            std::fs::write(path, data)?;
+            super::atomic_write(&path, data.as_bytes())?;
         }
         Ok(())
     }

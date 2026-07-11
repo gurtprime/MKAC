@@ -3,6 +3,7 @@ use egui::{RichText, Ui};
 use crate::config::settings::Settings;
 use crate::ui::{theme, widgets};
 
+#[derive(Default)]
 pub struct SettingsState {
     /// Shared with the footer rebind chip. Kept here so the settings panel
     /// and footer widget use the same capture state.
@@ -10,16 +11,8 @@ pub struct SettingsState {
     pub feedback: Option<(String, bool)>,
 }
 
-impl Default for SettingsState {
-    fn default() -> Self {
-        Self {
-            capturing_toggle: false,
-            feedback: None,
-        }
-    }
-}
-
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum SettingsAction {
     SetAutostart(bool),
     SetCloseToTray(bool),
@@ -27,19 +20,13 @@ pub enum SettingsAction {
     SetResizableWindow(bool),
 }
 
-pub fn show_options(
-    ui: &mut Ui,
-    settings: &mut Settings,
-    actions: &mut Vec<SettingsAction>,
-) {
+pub fn show_options(ui: &mut Ui, settings: &mut Settings, actions: &mut Vec<SettingsAction>) {
     widgets::surface_card(ui, |ui| {
         widgets::card_header(ui, "OPTIONS");
         ui.add_space(6.0);
 
         let mut autostart = settings.autostart;
-        if widgets::checkbox(ui, &mut autostart, "Launch MKAC when Windows starts")
-            .clicked()
-        {
+        if widgets::checkbox(ui, &mut autostart, "Launch MKAC when Windows starts").clicked() {
             actions.push(SettingsAction::SetAutostart(autostart));
         }
 
@@ -60,9 +47,7 @@ pub fn show_options(
         }
 
         let mut resizable = settings.resizable_window;
-        if widgets::checkbox(ui, &mut resizable, "Resizable window (experimental)")
-            .clicked()
-        {
+        if widgets::checkbox(ui, &mut resizable, "Resizable window (experimental)").clicked() {
             actions.push(SettingsAction::SetResizableWindow(resizable));
         }
     });
@@ -71,7 +56,11 @@ pub fn show_options(
 pub fn show_feedback(ui: &mut Ui, state: &SettingsState) {
     if let Some((msg, good)) = &state.feedback {
         ui.add_space(6.0);
-        let color = if *good { theme::p().accent } else { theme::p().danger };
+        let color = if *good {
+            theme::p().accent
+        } else {
+            theme::p().danger
+        };
         ui.label(RichText::new(msg).size(12.0).color(color));
     }
 }

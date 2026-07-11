@@ -1,9 +1,9 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 
 use egui::{
-    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke,
-    TextStyle, Visuals, style::Spacing,
+    style::Spacing, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin,
+    Stroke, TextStyle, Visuals,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -111,10 +111,8 @@ fn set_current(theme: Theme) {
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
 
-    let inter_semibold: &'static [u8] =
-        include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
-    let inter_medium: &'static [u8] =
-        include_bytes!("../../assets/fonts/Inter-Medium.ttf");
+    let inter_semibold: &'static [u8] = include_bytes!("../../assets/fonts/Inter-SemiBold.ttf");
+    let inter_medium: &'static [u8] = include_bytes!("../../assets/fonts/Inter-Medium.ttf");
 
     fonts.font_data.insert(
         "inter-semibold".into(),
@@ -204,22 +202,36 @@ fn apply_style(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
     style.visuals = make_visuals();
 
-    let mut spacing = Spacing::default();
-    spacing.item_spacing = egui::vec2(9.0, 7.0);
-    spacing.button_padding = egui::vec2(11.0, 6.0);
-    spacing.interact_size = egui::vec2(32.0, 22.0);
-    spacing.window_margin = Margin::same(14);
-    spacing.menu_margin = Margin::same(8);
-    spacing.indent = 12.0;
-    spacing.slider_width = 150.0;
+    let spacing = Spacing {
+        item_spacing: egui::vec2(9.0, 7.0),
+        button_padding: egui::vec2(11.0, 6.0),
+        interact_size: egui::vec2(32.0, 22.0),
+        window_margin: Margin::same(14),
+        menu_margin: Margin::same(8),
+        indent: 12.0,
+        slider_width: 150.0,
+        ..Default::default()
+    };
     style.spacing = spacing;
 
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(17.0, FontFamily::Proportional)),
+        (
+            TextStyle::Heading,
+            FontId::new(17.0, FontFamily::Proportional),
+        ),
         (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
-        (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
+        (
+            TextStyle::Monospace,
+            FontId::new(13.0, FontFamily::Monospace),
+        ),
+        (
+            TextStyle::Button,
+            FontId::new(14.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Small,
+            FontId::new(12.0, FontFamily::Proportional),
+        ),
     ]
     .into();
 

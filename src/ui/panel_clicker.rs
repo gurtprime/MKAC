@@ -1,6 +1,6 @@
 use egui::{DragValue, RichText, Ui};
 
-use crate::engine::{ClickPattern, MouseButton, Target, TriggerMode, mouse};
+use crate::engine::{mouse, ClickPattern, MouseButton, Target, TriggerMode};
 use crate::ui::{nav, theme, widgets};
 
 pub struct MouseConfig {
@@ -10,6 +10,7 @@ pub struct MouseConfig {
     pub fixed_x: i32,
     pub fixed_y: i32,
     pub mode: TriggerMode,
+    pub repeat_while_toggled: bool,
 }
 
 impl Default for MouseConfig {
@@ -21,6 +22,7 @@ impl Default for MouseConfig {
             fixed_x: 0,
             fixed_y: 0,
             mode: TriggerMode::Auto,
+            repeat_while_toggled: false,
         }
     }
 }
@@ -28,7 +30,10 @@ impl Default for MouseConfig {
 impl MouseConfig {
     pub fn target(&self) -> Target {
         if self.use_fixed_point {
-            Target::FixedPoint { x: self.fixed_x, y: self.fixed_y }
+            Target::FixedPoint {
+                x: self.fixed_x,
+                y: self.fixed_y,
+            }
         } else {
             Target::Cursor
         }
@@ -53,6 +58,19 @@ pub fn show(ui: &mut Ui, cfg: &mut MouseConfig) {
                 ],
             );
         });
+
+        if matches!(cfg.mode, TriggerMode::Hold) {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                widgets::row_label(ui, "Behavior");
+                ui.add_space(4.0);
+                nav::segmented(
+                    ui,
+                    &mut cfg.repeat_while_toggled,
+                    &[(false, "Physical"), (true, "Repeat")],
+                );
+            });
+        }
 
         ui.add_space(6.0);
 
@@ -136,5 +154,4 @@ pub fn show(ui: &mut Ui, cfg: &mut MouseConfig) {
             });
         }
     });
-
 }

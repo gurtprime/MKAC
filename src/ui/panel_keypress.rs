@@ -9,7 +9,7 @@ pub struct KeyPressConfig {
     pub mods: KeyMods,
     pub mode: TriggerMode,
     /// True while the Press chip is in capture mode (waiting for a
-    /// keypress to adopt as the target key). The LL hook reads this via
+    /// keypress to adopt as the target key). The input thread reads this via
     /// REBIND_ACTIVE so bound hotkeys don't fire during the capture.
     pub capturing_key: bool,
 }

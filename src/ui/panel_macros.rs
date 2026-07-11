@@ -2,8 +2,8 @@ use std::time::{Duration, Instant};
 
 use egui::{Align, DragValue, Layout, RichText, TextEdit, Ui};
 
-use crate::engine::HotkeyBinding;
 use crate::engine::macros::Macro;
+use crate::engine::HotkeyBinding;
 use crate::ui::{theme, widgets};
 
 pub struct MacrosState {
@@ -69,11 +69,7 @@ pub fn show(
     // RECORD
     widgets::surface_card(ui, |ui| {
         let rebind_changed = widgets::card_header_with(ui, "RECORD", |ui| {
-            widgets::rebindable_hotkey_chip(
-                ui,
-                record_hotkey,
-                &mut state.capturing_record_hotkey,
-            )
+            widgets::rebindable_hotkey_chip(ui, record_hotkey, &mut state.capturing_record_hotkey)
         });
         if rebind_changed {
             actions.push(MacroAction::SetRecordHotkey(*record_hotkey));
@@ -182,7 +178,10 @@ pub fn show(
                 let is_loaded = state.loaded.as_deref() == Some(&name);
                 ui.horizontal(|ui| {
                     let label = if is_loaded {
-                        RichText::new(&name).size(13.0).color(theme::p().accent).strong()
+                        RichText::new(&name)
+                            .size(13.0)
+                            .color(theme::p().accent)
+                            .strong()
                     } else {
                         RichText::new(&name).size(13.0).color(theme::p().text)
                     };
@@ -249,7 +248,11 @@ pub fn show(
 
     if let Some((msg, good)) = &state.feedback {
         ui.add_space(6.0);
-        let color = if *good { theme::p().accent } else { theme::p().danger };
+        let color = if *good {
+            theme::p().accent
+        } else {
+            theme::p().danger
+        };
         ui.label(RichText::new(msg).size(12.0).color(color));
     }
 

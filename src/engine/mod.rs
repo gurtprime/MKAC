@@ -7,7 +7,7 @@ pub mod virtual_hold;
 
 use std::thread::{self, JoinHandle};
 
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 
 pub use command::{
     Action, ClickPattern, Command, EngineEvent, HotkeyBinding, JitterCurve, KeyMods, MouseButton,
@@ -30,10 +30,23 @@ impl EngineHandle {
             .spawn(move || scheduler::run(cmd_rx, evt_tx))
             .expect("spawn engine thread");
 
-        Self { cmd_tx, evt_rx, thread: Some(thread) }
+        Self {
+            cmd_tx,
+            evt_rx,
+            thread: Some(thread),
+        }
     }
 
     pub fn shutdown(mut self) {
+        let _ = self.cmd_tx.send(Command::Shutdown);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+impl Drop for EngineHandle {
+    fn drop(&mut self) {
         let _ = self.cmd_tx.send(Command::Shutdown);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
